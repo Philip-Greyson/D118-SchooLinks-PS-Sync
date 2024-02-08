@@ -26,15 +26,29 @@ CNOPTS = pysftp.CnOpts(knownhosts='known_hosts')  # connection options to use th
 
 STUDENT_TAGS_ENABLED = False
 STUDENT_TAGS_FILE_NAME = 'student_tags.csv'
-GPA_ENABLED = False
+GPA_ENABLED = True
 GPA_FILE_NAME = 'gpa.csv'
-ATTENDANCE_ENABLED = False
+ATTENDANCE_ENABLED = True
 ATTENDANCE_FILE_NAME = 'attendance_percentage.csv'
-GRADES = [9,10,11,12]
-ACTIVE_SCHOOL_CODE = 5
+IGNORED_SCHOOL_CODE = 901  # school code to ignore even if grades match high schoolers. We use this because we have a pre-enrolled building we want to ignore
 
 print(f"Username: {DB_UN} | Password: {DB_PW} | Server: {DB_CS}")  # debug so we can see where oracle is trying to connect to/with
 print(f"SFTP Username: {SFTP_UN} | SFTP Password: {SFTP_PW} | SFTP Server: {SFTP_HOST}")  # debug so we can see where pysftp is trying to connect to/with
+
+def debug_null_entries(id: int, fte: int, today: date) -> None:
+    """Function to find and count the 'NULL' entries in the PS_Ada_ADM_Daily_Ctod table."""
+    cur.execute('SELECT COUNT(CalendarDate) FROM PS_AdaAdm_Daily_Ctod WHERE CalendarDate <= :today AND AttendanceValue IS NULL AND studentid = :id AND FTEID = :fte', id = id, fte = fte, today = today)
+    # cur.execute('SELECT COUNT(CalendarDate) FROM PS_AdaAdm_Daily_Ctod')
+    null_count = cur.fetchall()[0][0]
+    if null_count > 0:
+        cur.execute('SELECT CalendarDate FROM PS_AdaAdm_Daily_Ctod WHERE CalendarDate <= :today AND AttendanceValue IS NULL AND studentid = :id AND FTEID = :fte', id = id, fte = fte, today = today)
+        null_days = cur.fetchall()
+        print(f'WARN: Student {stuNum} has {null_count} NULL entries in their AttendanceValue fields, total attendance may be inaccurate!')
+        print(f'WARN: Student {stuNum} has {null_count} NULL entries in their AttendanceValue fields, total attendance may be inaccurate!', file=log)
+        for day in null_days:
+            print(day[0].strftime('%m/%d/%Y'))
+            print(day[0].strftime('%m/%d/%Y'), file=log)
+
 
 if __name__ == '__main__':  # main file execution
     with open('schoolinks_log.txt', 'w') as log:  # open logging file
@@ -43,37 +57,62 @@ if __name__ == '__main__':  # main file execution
         startTime = startTime.strftime('%H:%M:%S')
         print(f'INFO: Execution started at {startTime}')
         print(f'INFO: Execution started at {startTime}', file=log)
-        with oracledb.connect(user=DB_UN, password=DB_PW, dsn=DB_CS) as con:  # create the connecton to the database
-            try:
-                with con.cursor() as cur:  # start an entry cursor
-                    # cur.execute('SELECT attendance.att_date, attendance_code.description, attendance.ada_value_code FROM attendance INNER JOIN attendance_code ON attendance.attendance_codeid = attendance_code.id WHERE attendance.studentid = 9575 AND attendance.yearid = 33 and ATT_MODE_CODE = :daycode ORDER BY attendance.att_date DESC', daycode = "ATT_ModeDaily")
-                    # cur.execute('SELECT COUNT(distinct dcid) FROM attendance WHERE studentid = 10621 AND yearid = 33 and ATT_MODE_CODE = :daycode', daycode = "ATT_ModeDaily")
-                    # cur.execute('SELECT calendardate, attendancevalue, grade_level FROM PS_AdaAdm_Daily_Ctod WHERE studentid = 9575 AND grade_level = 9 ORDER BY calendardate DESC')
-                    cur.execute('SELECT student_number, id, fteid FROM students WHERE enroll_status = 0 AND grade_level IN (9,10,11,12) AND schoolid = :school ORDER BY student_number DESC', school = ACTIVE_SCHOOL_CODE)
-                    students = cur.fetchall()
-                    for student in students:
+        with open(ATTENDANCE_FILE_NAME, 'w') as attendance_output:  # open the attendance output file
+            with open(GPA_FILE_NAME, 'w') as gpa_output:  # open the gpa output file
+                with open(STUDENT_TAGS_FILE_NAME, 'w') as tags_output:  # open the tags output file
+                    print('student_number,attendance_percentage', file=attendance_output)  # print out the header row to the attendance percentage file
+                    print('student_number,numerator_unweighted,numerator_weighted', file=gpa_output)  # print out the header row to the gpa file
+                    print('student_number,name,detailed_name,description')  # print out the header row to the tags file
+                    with oracledb.connect(user=DB_UN, password=DB_PW, dsn=DB_CS) as con:  # create the connecton to the database
                         try:
-                            stuNum = str(int(student[0]))  # strip out the trailing .0 by converting to int then string
-                            stuID = int(student[1])
-                            stuFTE = int(student[2])
-                            cur.execute('SELECT SUM(AttendanceValue) FROM PS_AdaAdm_Daily_Ctod WHERE CalendarDate <= :today AND FTEID = :fte AND studentid = :id', id = stuID, fte = stuFTE, today = todaysDate)
-                            attendance = cur.fetchall()
-                            presentCount = int(attendance[0][0])
-                            cur.execute('SELECT SUM(MembershipValue) FROM PS_AdaAdm_Daily_Ctod WHERE CalendarDate <= :today AND FTEID = :fte AND studentid = :id', id = stuID, fte = stuFTE, today = todaysDate)
-                            days = cur.fetchall()
-                            totalEnrolled = int(days[0][0])
-                            percentPresent = presentCount / totalEnrolled
-                            print(f'Student {stuNum} - Days Present: {presentCount} | Total Days Enrolled: {totalEnrolled} | Percent Present: {percentPresent}')
-                            print(f'Student {stuNum} - Days Present: {presentCount} | Total Days Enrolled: {totalEnrolled} | Percent Present: {percentPresent}', file=log)
+                            with con.cursor() as cur:  # start an entry cursor
+                                cur.execute('SELECT students.student_number, students.id, students.fteid, u_def_ext_students0.simple_gpa, u_def_ext_students0.weighted_gpa\
+                                            FROM students LEFT JOIN u_def_ext_students0 ON students.dcid = u_def_ext_students0.studentsdcid\
+                                            WHERE students.enroll_status = 0 AND students.grade_level IN (9,10,11,12) AND NOT students.schoolid = :school ORDER BY students.student_number DESC', school = IGNORED_SCHOOL_CODE)
+                                students = cur.fetchall()
+                                for student in students:
+                                    try:
+                                        stuNum = str(int(student[0]))  # strip out the trailing .0 by converting to int then string
+                                        stuID = int(student[1])
+                                        stuFTE = int(student[2])
+                                        simpleGPA = float(student[3]) if student[3] else None  # retrieve simple gpa from custom field if it exists, otherwise set to none
+                                        weightedGPA = float(student[4]) if student[4] else None  # retrieve weighted gpa from custom field if it exists, otherwise set to none
+                                        print(f'INFO: Starting student {stuNum}')
+                                        print(f'INFO: Starting student {stuNum}', file=log)
+                                        if ATTENDANCE_ENABLED:
+                                            try:
+                                                # debug_null_entries(stuID, stuFTE, todaysDate)  # call the function to find and print out the entries that have "NULL" in their AttendanceValue field
+                                                cur.execute('SELECT SUM(AttendanceValue) FROM PS_AdaAdm_Daily_Ctod WHERE CalendarDate <= :today AND FTEID = :fte AND studentid = :id', id = stuID, fte = stuFTE, today = todaysDate)
+                                                presentCount = cur.fetchall()[0][0]
+                                                cur.execute('SELECT SUM(MembershipValue) FROM PS_AdaAdm_Daily_Ctod WHERE CalendarDate <= :today AND FTEID = :fte AND studentid = :id', id = stuID, fte = stuFTE, today = todaysDate)
+                                                totalEnrolled = cur.fetchall()[0][0]
+                                                if presentCount and totalEnrolled:  # if we have values for both results (aka not None/Null entries), proceed to find the percentage present and output it
+                                                    percentPresent = presentCount / totalEnrolled
+                                                    # print(f'DBUG: Student {stuNum} - Days Present: {presentCount} | Total Days Enrolled: {totalEnrolled} | Percent Present: {percentPresent}')
+                                                    # print(f'DBUG: Student {stuNum} - Days Present: {presentCount} | Total Days Enrolled: {totalEnrolled} | Percent Present: {percentPresent}', file=log)
+                                                    print(f'{stuNum},{percentPresent}', file=attendance_output)  # output the student entry to the attendance output file
+                                                else:
+                                                    print(f'WARN: Student {stuNum} has all "NULL" entries for their AttendanceValue or MembershipValue fields in PS_AdaAdm_Daily_Ctod, they will be skipped')
+                                                    print(f'WARN: Student {stuNum} has all "NULL" entries for their AttendanceValue or MembershipValue fields in PS_AdaAdm_Daily_Ctod, they will be skipped', file=log)
+                                            except Exception as er:
+                                                print(f'ERROR while processing attendance for {stuNum}: {er}')
+                                                print(f'ERROR while processing attendance for {stuNum}: {er}', file=log)
+                                        if GPA_ENABLED:
+                                            try:
+                                                if simpleGPA and weightedGPA:  # if both the simple and weigted gpa's exist, we can proceed with output
+                                                    print(f'{stuNum},{simpleGPA},{weightedGPA}', file=gpa_output)  # output the student entry to the gpa output file
+                                                else:
+                                                    print(f'WARN: Student {stuNum} does not have GPA entries in their custom fields, they will be skipped')
+                                                    print(f'WARN: Student {stuNum} does not have GPA entries in their custom fields, they will be skipped', file=log)
+                                            except Exception as er:
+                                                print(f'ERROR while processing GPA for student {stuNum}: {er}')
+                                                print(f'ERROR while processing GPA for student {stuNum}: {er}', file=log)
+                                    except Exception as er:
+                                        print(f'ERROR on {student[0]}: {er}')
+                                        print(f'ERROR on {student[0]}: {er}', file=log)
                         except Exception as er:
-                            print(f'ERROR on {student[0]}: {er}')
-                            print(f'ERROR on {student[0]}: {er}', file=log)
-                    # for entry in attendance:
-                        # print(entry)
-                        # print(f'{entry[0]} - {entry[1]} - {entry[2]}')
-            except Exception as er:
-                print(f'ERROR while doing initial PowerSchool query or file handling: {er}')
-                print(f'ERROR while doing initial PowerSchool query or file handling: {er}', file=log)
+                            print(f'ERROR while doing initial PowerSchool query or file handling: {er}')
+                            print(f'ERROR while doing initial PowerSchool query or file handling: {er}', file=log)
 
         try:
             #after all the files are done writing and now closed, open an sftp connection to the server and place the file on there
@@ -86,17 +125,17 @@ if __name__ == '__main__':  # main file execution
                 # print(sftp.pwd)  # debug to list current working directory
                 # print(sftp.listdir())  # debug to list files and directory in current directory
                 if STUDENT_TAGS_ENABLED:
-                    sftp.put(STUDENT_TAGS_FILE_NAME)
-                    print('INFO: Student tags placed on remote server')
-                    print('INFO: Student tags placed on remote server', file=log)
+                    # sftp.put(STUDENT_TAGS_FILE_NAME)
+                    print('ACTION: Student tags placed on remote server')
+                    print('ACTION: Student tags placed on remote server', file=log)
                 if GPA_ENABLED:
                     sftp.put(GPA_FILE_NAME)
-                    print('INFO: GPA placed on remote server')
-                    print('INFO: GPA placed on remote server', file=log)
+                    print('ACTION: GPA placed on remote server')
+                    print('ACTION: GPA placed on remote server', file=log)
                 if ATTENDANCE_ENABLED:
                     sftp.put(ATTENDANCE_FILE_NAME)
-                    print('INFO: Attendance placed on remote server')
-                    print('INFO: Attendance placed on remote server', file=log)
+                    print('ACTION: Attendance placed on remote server')
+                    print('ACTION: Attendance placed on remote server', file=log)
         except Exception as er:
             print(f'ERROR while connecting or uploading to SchooLinks SFTP server: {er}')
             print(f'ERROR while connecting or uploading to SchooLinks SFTP server: {er}', file=log)

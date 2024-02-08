@@ -1,3 +1,6 @@
 ruff.toml
 schoolinks_log.txt
 known_hosts
+attendance_percentage.csv
+gpa.csv
+student_tags.csv
