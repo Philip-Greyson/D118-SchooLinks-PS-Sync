@@ -24,7 +24,7 @@ SFTP_PW = os.environ.get('SCHOOLINKS_SFTP_PASSWORD')
 SFTP_HOST = os.environ.get('SCHOOLINKS_SFTP_ADDRESS')
 CNOPTS = pysftp.CnOpts(knownhosts='known_hosts')  # connection options to use the known_hosts file for key validation
 
-STUDENT_TAGS_ENABLED = False
+STUDENT_TAGS_ENABLED = True
 STUDENT_TAGS_FILE_NAME = 'student_tags.csv'
 GPA_ENABLED = True
 GPA_FILE_NAME = 'gpa.csv'
@@ -62,13 +62,15 @@ if __name__ == '__main__':  # main file execution
                 with open(STUDENT_TAGS_FILE_NAME, 'w') as tags_output:  # open the tags output file
                     print('student_number,attendance_percentage', file=attendance_output)  # print out the header row to the attendance percentage file
                     print('student_number,numerator_unweighted,numerator_weighted', file=gpa_output)  # print out the header row to the gpa file
-                    print('student_number,name,detailed_name,description')  # print out the header row to the tags file
+                    print('student_number,name,detailed_name,description', file=tags_output)  # print out the header row to the tags file
                     with oracledb.connect(user=DB_UN, password=DB_PW, dsn=DB_CS) as con:  # create the connecton to the database
                         try:
                             with con.cursor() as cur:  # start an entry cursor
-                                cur.execute('SELECT students.student_number, students.id, students.fteid, u_def_ext_students0.simple_gpa, u_def_ext_students0.weighted_gpa\
-                                            FROM students LEFT JOIN u_def_ext_students0 ON students.dcid = u_def_ext_students0.studentsdcid\
-                                            WHERE students.enroll_status = 0 AND students.grade_level IN (9,10,11,12) AND NOT students.schoolid = :school ORDER BY students.student_number DESC', school = IGNORED_SCHOOL_CODE)
+                                cur.execute('SELECT students.student_number, students.id, students.fteid, u_def_ext_students0.simple_gpa, u_def_ext_students0.weighted_gpa,\
+                                            s_il_stu_x.iep, s_il_stu_plan504_x.participant, s_il_stu_x.lep, s_il_stu_x.lii, s_stu_crdc_x.giftedtalentedprograms_yn\
+                                            FROM students LEFT JOIN u_def_ext_students0 ON students.dcid = u_def_ext_students0.studentsdcid LEFT JOIN s_il_stu_x ON students.dcid = s_il_stu_x.studentsdcid\
+                                            LEFT JOIN s_il_stu_plan504_x ON students.dcid = s_il_stu_plan504_x.studentsdcid LEFT JOIN s_stu_crdc_x ON students.dcid = s_stu_crdc_x.studentsdcid\
+                                            WHERE students.enroll_status = 0 AND students.grade_level IN (8,9,10,11,12) AND NOT students.schoolid = :school ORDER BY students.student_number DESC', school = IGNORED_SCHOOL_CODE)
                                 students = cur.fetchall()
                                 for student in students:
                                     try:
@@ -77,6 +79,11 @@ if __name__ == '__main__':  # main file execution
                                         stuFTE = int(student[2])
                                         simpleGPA = float(student[3]) if student[3] else None  # retrieve simple gpa from custom field if it exists, otherwise set to none
                                         weightedGPA = float(student[4]) if student[4] else None  # retrieve weighted gpa from custom field if it exists, otherwise set to none
+                                        iep = True if student[5] == 1 else False
+                                        section504 = True if student[6] == 1 else False
+                                        ell = True if student[7] == 1 else False
+                                        lowIncome = True if student[8] == 1 else False
+                                        gifted = True if str(student[9]) == 'Y' else False
                                         print(f'INFO: Starting student {stuNum}')
                                         print(f'INFO: Starting student {stuNum}', file=log)
                                         if ATTENDANCE_ENABLED:
@@ -99,6 +106,8 @@ if __name__ == '__main__':  # main file execution
                                                 print(f'ERROR while processing attendance for {stuNum}: {er}', file=log)
                                         if GPA_ENABLED:
                                             try:
+                                                # print(f'DBUG: Student {stuNum} - Simple: {simpleGPA} | Weighted: {weightedGPA}')  # debug
+                                                # print(f'DBUG: Student {stuNum} - Simple: {simpleGPA} | Weighted: {weightedGPA}', file=log)  # debug
                                                 if simpleGPA and weightedGPA:  # if both the simple and weigted gpa's exist, we can proceed with output
                                                     print(f'{stuNum},{simpleGPA},{weightedGPA}', file=gpa_output)  # output the student entry to the gpa output file
                                                 else:
@@ -107,6 +116,23 @@ if __name__ == '__main__':  # main file execution
                                             except Exception as er:
                                                 print(f'ERROR while processing GPA for student {stuNum}: {er}')
                                                 print(f'ERROR while processing GPA for student {stuNum}: {er}', file=log)
+                                        if STUDENT_TAGS_ENABLED:
+                                            try:
+                                                # print(f'DBUG: Student {stuNum} - IEP: {iep} | 504: {section504} | EL: {ell} | Low Income: {lowIncome} | Gifted: {gifted}')  # debug
+                                                # print(f'DBUG: Student {stuNum} - IEP: {iep} | 504: {section504} | EL: {ell} | Low Income: {lowIncome} | Gifted: {gifted}', file=log)  # debug
+                                                if iep:
+                                                    print(f'{stuNum},IEP,Individualized Education Plan,Student with IDEA Services', file=tags_output)
+                                                if section504:
+                                                    print(f'{stuNum},504,Section 504,Student with 504 Accomodation', file=tags_output)
+                                                if ell:
+                                                    print(f'{stuNum},EL,English Learner,Low English Proficiency Learner', file=tags_output)
+                                                if lowIncome:
+                                                    print(f'{stuNum},LI,Low Income,Low Income/Economically Disadvantaged Family', file=tags_output)
+                                                if gifted:
+                                                    print(f'{stuNum},GFT,Gifted & Talented,Student in Gifted or Talented Program', file=tags_output)
+                                            except Exception as er:
+                                                print(f'ERROR while processing tags for student {stuNum}: {er}')
+                                                print(f'ERROR while processing tags for student {stuNum}: {er}', file=log)
                                     except Exception as er:
                                         print(f'ERROR on {student[0]}: {er}')
                                         print(f'ERROR on {student[0]}: {er}', file=log)
@@ -125,7 +151,7 @@ if __name__ == '__main__':  # main file execution
                 # print(sftp.pwd)  # debug to list current working directory
                 # print(sftp.listdir())  # debug to list files and directory in current directory
                 if STUDENT_TAGS_ENABLED:
-                    # sftp.put(STUDENT_TAGS_FILE_NAME)
+                    sftp.put(STUDENT_TAGS_FILE_NAME)
                     print('ACTION: Student tags placed on remote server')
                     print('ACTION: Student tags placed on remote server', file=log)
                 if GPA_ENABLED:
