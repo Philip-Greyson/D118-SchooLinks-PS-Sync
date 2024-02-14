@@ -2,8 +2,16 @@
 
 https://github.com/Philip-Greyson/D118-SchooLinks-PS-Sync
 
+Does a query for enrolled students, finds their attendance, GPA, and tags and outputs to correct files which are uploaded to SchooLinks SFTP server.
 
+needs oracledb: pip install oracledb --upgrade
+needs pysftp: pip install pysftp --upgrade
+
+See the following for PS table information:
 https://ps.powerschool-docs.com/pssis-data-dictionary/latest/ps_adaadm_daily_ctod-ver5-0-0
+https://ps.powerschool-docs.com/pssis-data-dictionary/latest/students-1-ver3-6-1
+https://ps-compliance.powerschool-docs.com/pssis-il/latest/s_il_stu_x-ver-14-9-3
+https://ps-compliance.powerschool-docs.com/pssis-il/latest/s_il_stu_plan504_x-ver-18-8-0
 """
 
 # import modules
@@ -31,6 +39,7 @@ GPA_FILE_NAME = 'gpa.csv'
 ATTENDANCE_ENABLED = True
 ATTENDANCE_FILE_NAME = 'attendance_percentage.csv'
 IGNORED_SCHOOL_CODE = 901  # school code to ignore even if grades match high schoolers. We use this because we have a pre-enrolled building we want to ignore
+SCHOOLINKS_SFTP_DIRECTORY = '/automated'
 
 print(f"Username: {DB_UN} | Password: {DB_PW} | Server: {DB_CS}")  # debug so we can see where oracle is trying to connect to/with
 print(f"SFTP Username: {SFTP_UN} | SFTP Password: {SFTP_PW} | SFTP Server: {SFTP_HOST}")  # debug so we can see where pysftp is trying to connect to/with
@@ -147,7 +156,7 @@ if __name__ == '__main__':  # main file execution
                 print(f'INFO: SFTP connection to SchooLinks at {SFTP_HOST} successfully established', file=log)
                 # print(sftp.pwd)  # debug to list current working directory
                 # print(sftp.listdir())  # debug to list files and directory in current directory
-                sftp.chdir('/automated')
+                sftp.chdir(SCHOOLINKS_SFTP_DIRECTORY)
                 # print(sftp.pwd)  # debug to list current working directory
                 # print(sftp.listdir())  # debug to list files and directory in current directory
                 if STUDENT_TAGS_ENABLED:
